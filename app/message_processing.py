@@ -178,13 +178,17 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
                                         parts.append(types.Part.from_bytes(data=base64.b64decode(b64_data), mime_type=mime_type))
                                 elif image_url.startswith('http'):
                                     try:
-                                        req = urllib.request.Request(image_url, headers={'User-Agent': 'Mozilla/5.0'})
-                                        with urllib.request.urlopen(req, timeout=10) as response:
-                                            img_bytes = response.read()
-                                            mime_type = response.headers.get_content_type()
-                                            parts.append(types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
+                                        import concurrent.futures
+                                        def fetch_img():
+                                            req = urllib.request.Request(url_str, headers={'User-Agent': 'Mozilla/5.0'})
+                                            with urllib.request.urlopen(req, timeout=10) as response:
+                                                return response.read(), response.headers.get_content_type()
+                                                with concurrent.futures.ThreadPoolExecutor() as pool:
+                                                    future = pool.submit(fetch_img)
+                                                    img_bytes, mime_type = future.result(timeout=12) # 强制超时放弃，保护主线程
+                                                    parts.append(types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
                                     except Exception as e:
-                                        print(f"Warning: Failed to fetch remote image {image_url}: {e}")
+                                        print(f"Warning: Failed to fetch remote image {url_str}: {e}")
                             else:
                                 parts.append(types.Part.from_text(text="[图片已省略 / Image omitted]"))
                             # -------------------------
@@ -204,13 +208,17 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
                                     parts.append(types.Part.from_bytes(data=base64.b64decode(b64_data), mime_type=mime_type))
                             elif url_str.startswith('http'):
                                 try:
-                                    req = urllib.request.Request(url_str, headers={'User-Agent': 'Mozilla/5.0'})
-                                    with urllib.request.urlopen(req, timeout=10) as response:
-                                        img_bytes = response.read()
-                                        mime_type = response.headers.get_content_type()
-                                        parts.append(types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
-                                except Exception as e:
-                                    print(f"Warning: Failed to fetch remote image {url_str}: {e}")
+                                        import concurrent.futures
+                                        def fetch_img():
+                                            req = urllib.request.Request(url_str, headers={'User-Agent': 'Mozilla/5.0'})
+                                            with urllib.request.urlopen(req, timeout=10) as response:
+                                                return response.read(), response.headers.get_content_type()
+                                                with concurrent.futures.ThreadPoolExecutor() as pool:
+                                                    future = pool.submit(fetch_img)
+                                                    img_bytes, mime_type = future.result(timeout=12) # 强制超时放弃，保护主线程
+                                                    parts.append(types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
+                                    except Exception as e:
+                                        print(f"Warning: Failed to fetch remote image {url_str}: {e}")
                         else:
                             parts.append(types.Part.from_text(text="[图片已省略 / Image omitted]"))
                     # ----------------------------------------------------
