@@ -63,15 +63,13 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
         if is_image_model:
             is_openai_direct_model = False
             
-        # 生成配置（已在 api_helpers 包含 4K 画质、Google Search 挂载、比例解析）
         gen_config_dict = create_generation_config(request)
 
-        # 全面解封 Gemini 3.0/3.1 系列的思考能力
+        # 【致命 Bug 修复】：Gemini 3 Pro Image 模型强制原生思考，它极度严苛，如果传入 thinking_config 会直接抛出 400 INVALID_ARGUMENT 崩溃！所以生图模型绝对不能传这个配置！
         is_thinking_capable = "gemini-2.5" in base_model_name or "gemini-3" in base_model_name
-        if is_thinking_capable:
+        if is_thinking_capable and not is_image_model:
             if "thinking_config" not in gen_config_dict:
                 gen_config_dict["thinking_config"] = {}
-            # 无论是文本还是生图，统统开启思考，让它生图前构思并搜索
             gen_config_dict["thinking_config"]["include_thoughts"] = True
 
         client_to_use = None
@@ -131,7 +129,6 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
         else: 
             current_prompt_func = create_gemini_prompt
 
-            # 基础文本模型的传统联网搜索
             if is_grounded_search and not is_image_model:
                 search_tool = types.Tool(google_search=types.GoogleSearch())
                 if "tools" in gen_config_dict and isinstance(gen_config_dict["tools"], list):
