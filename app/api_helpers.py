@@ -145,7 +145,7 @@ def log_retry_attempt(retry_state):
     attempt = retry_state.attempt_number
     e = retry_state.outcome.exception()
     
-    # 【Bug 修复】：这里触发的只是重试，不计入死局错误，而是计入黄色的“API自动重试”卡片
+    # 仅增加重试次数，不计入致命错误
     stats.add_retry()
     print(f"⚠️ [API 自动重试] 遇到上游拥堵或短暂拒绝 ({e.__class__.__name__})。正在进行第 {attempt} 次护盾退避重试...")
 
@@ -178,7 +178,6 @@ def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
                     elif hasattr(part, 'text') and isinstance(part.text, str):
                         system_texts.append(part.text)
                         
-    # 生图模型不污染系统提示词，交由专用 image_generation_config 处理
     if system_texts and "image" not in request.model.lower():
         config["system_instruction"] = "\n".join(system_texts)
     
@@ -205,8 +204,9 @@ def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
             types.SafetySetting(category="HARM_CATEGORY_JAILBREAK", threshold=safety_threshold, method=safety_method)
     ]
 
-    function_declarations = []
+    tools_list = []
     if request.tools:
+        function_declarations = []
         for tool in request.tools:
             if tool.get("type") == "function":
                 func_def = tool
@@ -224,18 +224,15 @@ def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
                     declaration = {k: v for k, v in declaration.items() if v is not None}
                     if declaration.get("name"): 
                         function_declarations.append(declaration)
+        if function_declarations:
+            tools_list.append({"function_declarations": function_declarations})
 
-    # =============== 生图专属官方配置 (4K/高级比例/联网搜图) ===============
+    # =============== 🎨 生图专属官方配置 (4K / 动态比例 / 原生联网) ===============
     is_image_model = "image" in request.model.lower()
-    tools_list = []
     
-    if function_declarations:
-        tools_list.append({"function_declarations": function_declarations})
-
     if is_image_model:
         config["response_modalities"] = ["IMAGE"]
         
-        # 提取动态分辨率/比例 (不通过系统提示词污染)
         target_ar = "1:1"
         req_dict = request.model_dump()
         size_param = req_dict.get("size")
@@ -243,31 +240,27 @@ def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
             if size_param in ["1024x1024", "1:1"]: target_ar = "1:1"
             elif size_param in ["1024x768", "4:3"]: target_ar = "4:3"
             elif size_param in ["768x1024", "3:4"]: target_ar = "3:4"
-            elif size_param in ["16:9", "9:16"]: target_ar = size_param
+            elif size_param in ["16:9", "9:16", "21:9", "4:5", "5:4", "3:2", "2:3"]: target_ar = size_param
             
         for msg in reversed(request.messages):
             if msg.role == "user":
                 content = ""
                 if isinstance(msg.content, str): content = msg.content
                 elif isinstance(msg.content, list): content = " ".join([p.get("text", "") for p in msg.content if isinstance(p, dict) and p.get("type") == "text"])
-                ar_match = re.search(r'(?i)(?:--ar\s+)?(1[:：]1|16[:：]9|9[:：]16|3[:：]4|4[:：]3|21[:：]9|9[:：]21)', content)
+                ar_match = re.search(r'(?i)(?:--ar\s+)?(1[:：]1|16[:：]9|9[:：]16|3[:：]4|4[:：]3|21[:：]9|9[:：]21|4[:：]5|5[:：]4|3[:：]2|2[:：]3)', content)
                 if ar_match:
                     target_ar = ar_match.group(1).replace("：", ":")
                 break
                 
-        # 调用官方底层 image_generation_config 设定 4K 无压缩参数
-        config["image_generation_config"] = {
-            "aspect_ratio": target_ar,
-            "person_generation": "ALLOW_ALL",
-            "output_mime_type": "image/jpeg",
-            "media_resolution": "HIGH",     # 强开超高解析度
-            "quality": "HIGH",              # 强开最佳渲染品质
-            "sample_image_size": "4K"       # 原生注入 4K 请求 (解决 1K 限制)
-        }
+        # 彻底修复：使用官方原生的 image_config 结构，强力注入 4K 解析度
+        config["image_config"] = types.ImageConfig(
+            aspect_ratio=target_ar,
+            image_size="4K"
+        )
         
-        # 强制生图模型开启联网功能：生图前必须去谷歌核查动漫、实体的长相！
-        tools_list.append({"google_search": {}})
-    # ====================================================================
+        # 原生挂载 Google Search 工具，让 AI 生图前自己去查设定，不限制任何生图题材！
+        tools_list.append(types.Tool(google_search=types.GoogleSearch()))
+    # ==============================================================================
 
     if tools_list:
         config["tools"] = tools_list
