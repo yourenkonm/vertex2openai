@@ -153,7 +153,6 @@ class ExpressClientWrapper:
                 try:
                     response = await client.post(endpoint, headers=headers, params=params, json=payload, timeout=None)
                     response.raise_for_status()
-                    # 补充算力打印，使得非流式 Express 也能纳入准确统计
                     resp_json = response.json()
                     if isinstance(resp_json, dict) and "usage" in resp_json and resp_json["usage"]:
                         usage = resp_json["usage"]
@@ -236,8 +235,6 @@ class OpenAIDirectHandler:
             "safetySettings": self.safety_settings
         }
         
-        # 【致崩 Bug 修复】：只有在 Pro 推理系列才默认加入 thinkingConfig
-        # 从而彻底解决 Flash 系列带 -openai 引起的 400 (INVALID_ARGUMENT) 崩溃
         is_pro_model = "pro" in base_model_name.lower()
         if is_pro_model:
             google_config["thinkingConfig"] = {
@@ -282,7 +279,12 @@ class OpenAIDirectHandler:
         request: OpenAIRequest
     ) -> AsyncGenerator[str, None]:
         try:
-            openai_params_for_stream = {**openai_params, "stream": True}
+            # 【Bug 修复】：注入 include_usage，确保 OpenAI 直连流输出最后一个 chunk 能够成功吐出 usage 指标
+            openai_params_for_stream = {
+                **openai_params, 
+                "stream": True,
+                "stream_options": {"include_usage": True}
+            }
             
             stream_response = await execute_with_retry(
                 openai_client.chat.completions.create,
@@ -299,7 +301,6 @@ class OpenAIDirectHandler:
                     if not isinstance(chunk_as_dict, dict):
                         continue
                     
-                    # 补齐官方通道流式数据捕获，使得带 -openai 模型的流式消费也能正常并准确录入
                     usage = chunk_as_dict.get('usage')
                     if usage:
                         p_tk = usage.get("prompt_tokens", 0)
@@ -434,7 +435,6 @@ class OpenAIDirectHandler:
             )
             response_dict = response.model_dump(exclude_unset=True, exclude_none=True)
             
-            # 补齐直连通道非流式 Token 指标打印，确保统计准确性
             usage = response_dict.get('usage')
             if usage:
                 p_tk = usage.get("prompt_tokens", 0)
@@ -511,7 +511,6 @@ class OpenAIDirectHandler:
             model_id = f"google/{base_model_name}"
             openai_params = self.prepare_openai_params(request, model_id, is_openai_search)
             
-            # 【Bug 修复】：传入 base_model_name 动态调配
             openai_extra_body = self.prepare_extra_body(base_model_name)
             
             if request.stream:
