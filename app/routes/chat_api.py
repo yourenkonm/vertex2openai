@@ -17,7 +17,6 @@ from api_helpers import (
 )
 from openai_handler import OpenAIDirectHandler
 from project_id_discovery import discover_project_id
-# 导入全局代理生成器
 from vertex_ai_init import get_http_options
 
 router = APIRouter()
@@ -67,7 +66,7 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
             
         gen_config_dict = create_generation_config(request)
 
-        # =============== 🧠 更加鲁棒的、面向未来的推理模型检测（支持 2.5, 3.x, 3.5, 4.x 等所有更高版本） ===============
+        # =============== 🧠 更加鲁棒的、面向未来的推理模型检测与代系提取 ===============
         is_thinking_capable = False
         is_gemini_2_5 = False
         is_gemini_3_or_above = False
@@ -78,9 +77,9 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
             major = 0
             minor_val = 0.0
             
-            if groups[2]:  # 匹配到整代，如 gemini-3
+            if groups[2]:
                 major = int(groups[2])
-            elif groups[0] and groups[1]:  # 匹配到带小数点的代，如 gemini-2.5, gemini-3.5
+            elif groups[0] and groups[1]:
                 major = int(groups[0])
                 try:
                     minor_val = float(groups[1])
@@ -96,7 +95,7 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
                 is_gemini_3_or_above = True
         # ==============================================================================================
 
-        # 提取客户端可能传入的 reasoning_effort 参数
+        # 提取客户端可能传入的推理强度参数
         reasoning_effort = getattr(request, "reasoning_effort", None)
         if not reasoning_effort and hasattr(request, "model_extra") and request.model_extra:
             reasoning_effort = request.model_extra.get("reasoning_effort")
@@ -105,22 +104,32 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
             thinking_config = {"include_thoughts": True}
             
             if is_gemini_3_or_above:
-                # 适配 Gemini 3 / 3.5 代思考层级配置
-                if reasoning_effort == "low":
-                    thinking_config["thinking_level"] = "low"
-                elif reasoning_effort == "medium":
-                    thinking_config["thinking_level"] = "medium"
-                elif reasoning_effort == "high":
-                    thinking_config["thinking_level"] = "high"
+                # 【防崩溃探针优化】：
+                # 兼容 2.x 以上最新 SDK，同时兼容 1.51 以上过渡 SDK。若当前运行环境低于此版本，则自动安全降级，防止服务崩溃。
+                import google.genai
+                genai_version_str = getattr(google.genai, '__version__', '1.0.0')
+                try:
+                    parts = genai_version_str.split('.')
+                    sdk_supports_level = (int(parts[0]) >= 2) or (int(parts[0]) == 1 and int(parts[1]) >= 51)
+                except Exception:
+                    sdk_supports_level = False
+
+                if sdk_supports_level:
+                    if reasoning_effort == "low":
+                        thinking_config["thinking_level"] = "low"
+                    elif reasoning_effort == "medium":
+                        thinking_config["thinking_level"] = "medium"
+                    else:
+                        thinking_config["thinking_level"] = "high"
                 else:
-                    thinking_config["thinking_level"] = "high"
+                    print(f"⚠️ [防崩溃降级机制已激活] 当前 google-genai 运行库版本 ({genai_version_str}) 过低，已自动剥离 thinking_level。请更新依赖并重新构建容器！")
                     
             elif is_gemini_2_5:
-                # 适配 Gemini 2.5 代思考预算配置
+                # 2.5 系列严格使用预算制
                 if reasoning_effort == "low":
                     thinking_config["thinking_budget"] = 1024
                 else:
-                    thinking_config["thinking_budget"] = -1 # -1 激活谷歌自动动态预算
+                    thinking_config["thinking_budget"] = -1
             
             gen_config_dict["thinking_config"] = thinking_config
 
@@ -140,7 +149,6 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
                         if "gemini-2.5-pro" in base_model_name or "gemini-2.5-flash" in base_model_name:
                             project_id = await discover_project_id(key_val)
                             base_url = f"https://aiplatform.googleapis.com/v1/projects/{project_id}/locations/global"
-                            # 挂载代理 options
                             client_to_use = genai.Client(
                                 vertexai=True,
                                 api_key=key_val,
@@ -148,7 +156,6 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
                             )
                             client_to_use._api_client._http_options.api_version = None
                         else:
-                            # 挂载代理 options
                             client_to_use = genai.Client(
                                 vertexai=True, 
                                 api_key=key_val, 
@@ -168,7 +175,6 @@ async def chat_completions(fastapi_request: Request, request: OpenAIRequest, api
             
             if rotated_credentials and rotated_project_id:
                 try:
-                    # 挂载代理 options
                     client_to_use = genai.Client(
                         vertexai=True, 
                         credentials=rotated_credentials, 
