@@ -26,6 +26,10 @@ def extract_reasoning_by_tags(full_text: str, tag_name: str) -> Tuple[str, str]:
     return reasoning_content.strip(), normal_text.strip()
 
 def _extract_markdown_images_to_parts(text: str) -> Tuple[List[types.Part], str]:
+    """
+    Extract markdown images from text and convert them to Gemini Parts.
+    Returns a tuple of (image_parts, text_without_images)
+    """
     parts = []
     remaining_text = text
     pattern = r'!\[[^\]]*\]\(data:(image/[a-zA-Z0-9+.-]+);base64,([a-zA-Z0-9+/=]+)\)'
@@ -162,6 +166,7 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
                 if isinstance(message.content, str):
                     image_parts, clean_text = _extract_markdown_images_to_parts(message.content)
                     if clean_text: parts.append(types.Part.from_text(text=clean_text))
+                    
         else: 
             if message.content is None: continue
             

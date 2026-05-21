@@ -5,7 +5,7 @@ import asyncio
 import httpx
 import re
 import random 
-import base64  # 【核心导入】用于签名二进制编解码
+import base64  # 用于签名二进制编解码
 from typing import List, Dict, Any, Callable, Union, Optional
 
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -262,7 +262,7 @@ def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
                 content = ""
                 if isinstance(msg.content, str): content = msg.content
                 elif isinstance(msg.content, list): content = " ".join([p.get("text", "") for p in msg.content if isinstance(p, dict) and p.get("type") == "text"])
-                ar_match = re.search(r'(?i)(?:--ar\s+)?(1[:：]1|16[:：]9|9[:：]16|3[:：]4|4[:：]3|21[:：]9|9[:：]21|4[:：]5|5[:：]4|3[:：]2|2[:：]3)', content)
+                ar_match = re.search(r'(?i)(?:--ar\s+)?(1[:：]1|16[:：]9|9[:：]16|3[:：]4|4[:::]3|21[:：]9|9[:：]21|4[:：]5|5[:：]4|3[:：]2|2[:：]3)', content)
                 if ar_match:
                     target_ar = ar_match.group(1).replace("：", ":")
                 break
@@ -739,4 +739,28 @@ async def execute_gemini_call(
             if hasattr(response_obj_call, 'candidates'):
                 error_details += f"Candidates: {len(response_obj_call.candidates) if response_obj_call.candidates else 0}. "
                 if response_obj_call.candidates and len(response_obj_call.candidates) > 0:
-                    candidate = response_obj_call.candidates if isinstance(response_obj_call.candida
+                    candidate = response_obj_call.candidates if isinstance(response_obj_call.candidates, list) else response_obj_call.candidates
+                    if hasattr(candidate, 'content'):
+                        error_details += "Has content. "
+                        if hasattr(candidate.content, 'parts'):
+                            error_details += f"Parts: {len(candidate.content.parts) if candidate.content.parts else 0}. "
+                            if candidate.content.parts and len(candidate.content.parts) > 0:
+                                part = candidate.content.parts if isinstance(candidate.content.parts, list) else candidate.content.parts
+                                if hasattr(part, 'text'):
+                                    text_preview = str(getattr(part, 'text', ''))[:100]
+                                    error_details += f"First part text: '{text_preview}'"
+                                elif hasattr(part, 'function_call'):
+                                    error_details += f"First part is function_call: {part.function_call.name}"
+            else:
+                error_details += f"Response type: {type(response_obj_call).__name__}"
+            raise ValueError(error_details)
+        
+        if hasattr(response_obj_call, 'usage_metadata') and response_obj_call.usage_metadata:
+            um = response_obj_call.usage_metadata
+            p_tk = getattr(um, 'prompt_token_count', 0) or 0
+            c_tk = getattr(um, 'candidates_token_count', 0) or 0
+            t_tk = getattr(um, 'total_token_count', p_tk + c_tk) or (p_tk + c_tk)
+            print(f"💰 [算力消耗] 提示词: {p_tk} | 模型思考与生成: {c_tk} | 总计: {t_tk} Tokens")
+
+        openai_response_content = convert_to_openai_format(response_obj_call, request_obj.model)
+        return JSONResponse(content=openai_response_content)
