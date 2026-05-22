@@ -59,62 +59,84 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
         current_gemini_role = "" 
 
         if role == "tool":
-            if message.name and message.tool_call_id and message.content is not None:
-                tool_output_data = {}
-                try:
-                    if isinstance(message.content, str) and \
-                       (message.content.strip().startswith("{") and message.content.strip().endswith("}")) or \
-                       (message.content.strip().startswith("[") and message.content.strip().endswith("]")):
-                        tool_output_data = json.loads(message.content)
-                    else: 
-                        tool_output_data = {"result": message.content}
-                except json.JSONDecodeError:
-                    tool_output_data = {"result": str(message.content)}
-
-                # 【极简防 400 修复】: 丢弃所有 Base64 处理，直接传递原生 id
-                func_resp_kwargs = {
-                    "name": message.name,
-                    "response": tool_output_data,
-                }
-                if message.tool_call_id:
-                    func_resp_kwargs["id"] = message.tool_call_id
-                    
-                try:
-                    resp_part = types.Part(function_response=types.FunctionResponse(**func_resp_kwargs))
-                except Exception as e:
-                    print(f"Warning: Failed to inject FunctionResponse ID: {e}")
-                    resp_part = types.Part.from_function_response(name=message.name, response=tool_output_data)
-
-                parts.append(resp_part)
-                current_gemini_role = "function"
+            tool_call_id_str = message.tool_call_id or ""
+            
+            # 【核心护盾】：如果 ID 里没有我们的加密签名，说明这是客户端(如 Rikkahub)强塞的伪造示例！
+            # 必须降维成文本，否则 Gemini 3.5 会报 400 签名丢失错误
+            if "__thought__" not in tool_call_id_str:
+                mock_text = f"[System Observation - Tool `{message.name}` Result]:\n{message.content}"
+                parts.append(types.Part.from_text(text=mock_text))
+                current_gemini_role = "user"  # 纯文本必须挂在 user 身份下
             else:
-                continue
+                if message.name and message.content is not None:
+                    tool_output_data = {}
+                    try:
+                        if isinstance(message.content, str) and \
+                           (message.content.strip().startswith("{") and message.content.strip().endswith("}")) or \
+                           (message.content.strip().startswith("[") and message.content.strip().endswith("]")):
+                            tool_output_data = json.loads(message.content)
+                        else: 
+                            tool_output_data = {"result": message.content}
+                    except json.JSONDecodeError:
+                        tool_output_data = {"result": str(message.content)}
+
+                    parts_id = tool_call_id_str.split("__thought__")
+                    real_tool_id = parts_id[0]
+                    b64_sig = parts_id[1]
+                    thought_sig_bytes = None
+                    try: thought_sig_bytes = base64.b64decode(b64_sig)
+                    except: pass
+
+                    func_resp_kwargs = {"name": message.name, "response": tool_output_data}
+                    if real_tool_id:
+                        func_resp_kwargs["id"] = real_tool_id
+                        
+                    try:
+                        part_kwargs = {"function_response": types.FunctionResponse(**func_resp_kwargs)}
+                        if thought_sig_bytes:
+                            part_kwargs["thought_signature"] = thought_sig_bytes
+                        resp_part = types.Part(**part_kwargs)
+                    except Exception as e:
+                        print(f"Warning: Failed to inject FunctionResponse signature: {e}")
+                        resp_part = types.Part.from_function_response(name=message.name, response=tool_output_data)
+
+                    parts.append(resp_part)
+                    current_gemini_role = "function"
                 
         elif role == "assistant" and message.tool_calls:
             current_gemini_role = "model"
             for tool_call in message.tool_calls:
                 function_call_data = tool_call.get("function", {})
-                function_name = function_call_data.get("name")
+                function_name = function_call_data.get("name", "unknown")
                 arguments_str = function_call_data.get("arguments", "{}")
-                tool_call_id = tool_call.get("id")
+                tool_call_id_str = tool_call.get("id", "")
                 
-                try:
-                    parsed_arguments = json.loads(arguments_str)
-                except json.JSONDecodeError:
-                    parsed_arguments = {} 
-                    
-                if function_name:
-                    fc_kwargs = {
-                        "name": function_name,
-                        "args": parsed_arguments
-                    }
-                    if tool_call_id:
-                        fc_kwargs["id"] = tool_call_id
+                # 【核心护盾】：同理，拦截伪造的 Assistant 发起的调用
+                if "__thought__" not in tool_call_id_str:
+                    mock_text = f"[Model Action Log]: Decided to call function `{function_name}` with arguments: {arguments_str}"
+                    parts.append(types.Part.from_text(text=mock_text))
+                else:
+                    try: parsed_arguments = json.loads(arguments_str)
+                    except json.JSONDecodeError: parsed_arguments = {} 
+                        
+                    parts_id = tool_call_id_str.split("__thought__")
+                    real_tool_id = parts_id[0]
+                    b64_sig = parts_id[1]
+                    thought_sig_bytes = None
+                    try: thought_sig_bytes = base64.b64decode(b64_sig)
+                    except: pass
+
+                    fc_kwargs = {"name": function_name, "args": parsed_arguments}
+                    if real_tool_id:
+                        fc_kwargs["id"] = real_tool_id
                         
                     try:
-                        fc_part = types.Part(function_call=types.FunctionCall(**fc_kwargs))
+                        part_kwargs = {"function_call": types.FunctionCall(**fc_kwargs)}
+                        if thought_sig_bytes:
+                            part_kwargs["thought_signature"] = thought_sig_bytes
+                        fc_part = types.Part(**part_kwargs)
                     except Exception as e:
-                        print(f"Warning: Failed to inject FunctionCall ID: {e}")
+                        print(f"Warning: Failed to inject FunctionCall signature: {e}")
                         fc_part = types.Part.from_function_call(name=function_name, args=parsed_arguments)
                         
                     parts.append(fc_part)
@@ -330,83 +352,4 @@ def process_gemini_response_to_openai_dict(gemini_response_obj: Any, request_mod
         for i, candidate in enumerate(gemini_response_obj.candidates):
             message_payload = {"role": "assistant"}
             
-            raw_finish_reason = getattr(candidate, 'finish_reason', None)
-            openai_finish_reason = "stop" 
-            if raw_finish_reason:
-                if hasattr(raw_finish_reason, 'name'): raw_finish_reason_str = raw_finish_reason.name.upper()
-                else: raw_finish_reason_str = str(raw_finish_reason).upper()
-
-                if raw_finish_reason_str == "STOP": openai_finish_reason = "stop"
-                elif raw_finish_reason_str == "MAX_TOKENS": openai_finish_reason = "length"
-                elif raw_finish_reason_str == "SAFETY": openai_finish_reason = "content_filter"
-                elif raw_finish_reason_str in ["TOOL_CODE", "FUNCTION_CALL"]: openai_finish_reason = "tool_calls"
-            
-            function_call_detected = False
-            if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts') and candidate.content.parts:
-                for part in candidate.content.parts:
-                    if hasattr(part, 'function_call') and part.function_call is not None: 
-                        fc = part.function_call
-                        
-                        real_id = getattr(fc, 'id', None)
-                        if real_id:
-                            tool_call_id = real_id
-                        else:
-                            tool_call_id = f"call_{base_id}_{i}_{fc.name.replace(' ', '_')}_{int(time.time()*10000 + random.randint(0,9999))}"
-                        
-                        if "tool_calls" not in message_payload:
-                            message_payload["tool_calls"] = []
-                        
-                        message_payload["tool_calls"].append({
-                            "id": tool_call_id,
-                            "type": "function",
-                            "function": {
-                                "name": fc.name,
-                                "arguments": json.dumps(fc.args or {})
-                            }
-                        })
-                        message_payload["content"] = None 
-                        openai_finish_reason = "tool_calls" 
-                        function_call_detected = True
-            
-            if not function_call_detected:
-                reasoning_str, normal_content_str = parse_gemini_response_for_reasoning_and_content(candidate)
-                if app_config.SAFETY_SCORE and hasattr(candidate, 'safety_ratings') and candidate.safety_ratings:
-                    safety_html = _create_safety_ratings_html(candidate.safety_ratings)
-                    if reasoning_str: reasoning_str += safety_html
-                    else: normal_content_str += safety_html
-                
-                message_payload["content"] = normal_content_str
-                if reasoning_str: message_payload['reasoning_content'] = reasoning_str
-            
-            choice_item = {"index": i, "message": message_payload, "finish_reason": openai_finish_reason}
-            if hasattr(candidate, 'logprobs') and candidate.logprobs is not None: choice_item["logprobs"] = candidate.logprobs
-            choices.append(choice_item)
-            
-    elif hasattr(gemini_response_obj, 'text') and gemini_response_obj.text is not None:
-         content_str = gemini_response_obj.text or ""
-         choices.append({"index": 0, "message": {"role": "assistant", "content": content_str}, "finish_reason": "stop"})
-    else: 
-         choices.append({"index": 0, "message": {"role": "assistant", "content": None}, "finish_reason": "stop"})
-
-    usage_data = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    if hasattr(gemini_response_obj, 'usage_metadata'):
-        um = gemini_response_obj.usage_metadata
-        if hasattr(um, 'prompt_token_count'): usage_data['prompt_tokens'] = um.prompt_token_count
-        if hasattr(um, 'candidates_token_count'):
-            usage_data['completion_tokens'] = um.candidates_token_count
-            if hasattr(um, 'total_token_count'): usage_data['total_tokens'] = um.total_token_count
-            else: usage_data['total_tokens'] = usage_data['prompt_tokens'] + usage_data['completion_tokens']
-        elif hasattr(um, 'total_token_count'): 
-             usage_data['total_tokens'] = um.total_token_count
-             if usage_data['prompt_tokens'] > 0 and usage_data['total_tokens'] > usage_data['prompt_tokens']:
-                 usage_data['completion_tokens'] = usage_data['total_tokens'] - usage_data['prompt_tokens']
-        else: usage_data['total_tokens'] = usage_data['prompt_tokens'] 
-
-    return {
-        "id": base_id, "object": "chat.completion", "created": response_timestamp,
-        "model": request_model_str, "choices": choices,
-        "usage": usage_data
-    }
-
-def convert_to_openai_format(gemini_response: Any, model: str) -> Dict[str, Any]:
-    return process_gemini_response_to_openai_dict(gemini_response, model)
+            raw_finish_reason = getattr(candidate, 'fini
