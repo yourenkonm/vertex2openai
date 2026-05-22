@@ -71,19 +71,15 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
                 except json.JSONDecodeError:
                     tool_output_data = {"result": str(message.content)}
 
-                # 脱除我们之前添加的 __thought__ 后缀（如果存在），提取出最纯粹的底层 ID 
-                tool_call_id_str = message.tool_call_id or ""
-                real_tool_id = tool_call_id_str.split("__thought__")[0] if "__thought__" in tool_call_id_str else tool_call_id_str
-
+                # 【极简防 400 修复】: 丢弃所有 Base64 处理，直接传递原生 id
                 func_resp_kwargs = {
                     "name": message.name,
                     "response": tool_output_data,
                 }
-                if real_tool_id:
-                    func_resp_kwargs["id"] = real_tool_id
+                if message.tool_call_id:
+                    func_resp_kwargs["id"] = message.tool_call_id
                     
                 try:
-                    # 使用原生构造函数硬编码注入 id，绝对绕开 400 校验错误
                     resp_part = types.Part(function_response=types.FunctionResponse(**func_resp_kwargs))
                 except Exception as e:
                     print(f"Warning: Failed to inject FunctionResponse ID: {e}")
@@ -108,16 +104,12 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
                     parsed_arguments = {} 
                     
                 if function_name:
-                    # 同理脱除 __thought__ 并把 ID 原样塞入
-                    tool_call_id_str = tool_call_id or ""
-                    real_tool_id = tool_call_id_str.split("__thought__")[0] if "__thought__" in tool_call_id_str else tool_call_id_str
-
                     fc_kwargs = {
                         "name": function_name,
                         "args": parsed_arguments
                     }
-                    if real_tool_id:
-                        fc_kwargs["id"] = real_tool_id
+                    if tool_call_id:
+                        fc_kwargs["id"] = tool_call_id
                         
                     try:
                         fc_part = types.Part(function_call=types.FunctionCall(**fc_kwargs))
@@ -171,7 +163,6 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
                                         parts.append(types.Part.from_bytes(data=base64.b64decode(b64_data), mime_type=mime_type))
                                 elif image_url.startswith('http'):
                                     try:
-                                        # 【漏洞修复】：使用 httpx 替代 urllib，完美套用客户端的 PROXY_URL 代理，防止网络泄漏超时
                                         def fetch_img():
                                             import httpx
                                             client_args = {"timeout": 10.0, "follow_redirects": True}
@@ -206,7 +197,6 @@ def create_gemini_prompt(messages: List[OpenAIMessage]) -> List[types.Content]:
                                     parts.append(types.Part.from_bytes(data=base64.b64decode(b64_data), mime_type=mime_type))
                             elif url_str.startswith('http'):
                                 try:
-                                    # 【漏洞修复】：同样使用全局 httpx 抓图
                                     def fetch_img():
                                         import httpx
                                         client_args = {"timeout": 10.0, "follow_redirects": True}
@@ -358,8 +348,6 @@ def process_gemini_response_to_openai_dict(gemini_response_obj: Any, request_mod
                         fc = part.function_call
                         
                         real_id = getattr(fc, 'id', None)
-                        if not real_id: real_id = getattr(fc, 'thought_signature', None)
-                        
                         if real_id:
                             tool_call_id = real_id
                         else:

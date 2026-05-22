@@ -5,7 +5,6 @@ import asyncio
 import httpx
 import re
 import random 
-import base64  # 用于签名二进制编解码
 from typing import List, Dict, Any, Callable, Union, Optional
 
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -262,7 +261,7 @@ def create_generation_config(request: OpenAIRequest) -> Dict[str, Any]:
                 content = ""
                 if isinstance(msg.content, str): content = msg.content
                 elif isinstance(msg.content, list): content = " ".join([p.get("text", "") for p in msg.content if isinstance(p, dict) and p.get("type") == "text"])
-                ar_match = re.search(r'(?i)(?:--ar\s+)?(1[:：]1|16[:：]9|9[:：]16|3[:：]4|4[:::]3|21[:：]9|9[:：]21|4[:：]5|5[:：]4|3[:：]2|2[:：]3)', content)
+                ar_match = re.search(r'(?i)(?:--ar\s+)?(1[:：]1|16[:：]9|9[:：]16|3[:：]4|4[:：]3|21[:：]9|9[:：]21|4[:：]5|5[:：]4|3[:：]2|2[:：]3)', content)
                 if ar_match:
                     target_ar = ar_match.group(1).replace("：", ":")
                 break
@@ -343,29 +342,12 @@ def convert_chunk_to_openai(chunk: Any, model_name: str, response_id: str, candi
                 if hasattr(part, 'function_call') and part.function_call is not None: 
                     fc = part.function_call
                     
-                    # ---- 📦【打包 thought_signature】（打字机流式输出的核心修复）----
+                    # 【极简修复】：不搞多余拼接，原样直接传回真正的原生 id
                     real_id = getattr(fc, 'id', None)
-                    if not real_id: real_id = getattr(fc, 'thought_signature', None)
-                    
-                    # 拦截流式输出中 Part 携带的 thought_signature 二进制字节流并编码
-                    thought_sig = getattr(part, 'thought_signature', None)
-                    thought_sig_b64 = ""
-                    if thought_sig:
-                        if isinstance(thought_sig, bytes):
-                            thought_sig_b64 = base64.b64encode(thought_sig).decode('utf-8')
-                        elif isinstance(thought_sig, str):
-                            thought_sig_b64 = thought_sig
-                    
                     if real_id:
-                        if thought_sig_b64:
-                            tool_call_id = f"{real_id}__thought__{thought_sig_b64}"
-                        else:
-                            tool_call_id = real_id
+                        tool_call_id = real_id
                     else:
-                        if thought_sig_b64:
-                            tool_call_id = f"call_{response_id}_{candidate_index}_{fc.name.replace(' ', '_')}__thought__{thought_sig_b64}"
-                        else:
-                            tool_call_id = f"call_{response_id}_{candidate_index}_{fc.name.replace(' ', '_')}_{int(time.time()*10000 + random.randint(0,9999))}"
+                        tool_call_id = f"call_{response_id}_{candidate_index}_{fc.name.replace(' ', '_')}_{int(time.time()*10000 + random.randint(0,9999))}"
                     
                     current_tool_call_delta = {
                         "index": 0, 
