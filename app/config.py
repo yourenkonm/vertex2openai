@@ -7,7 +7,7 @@ class AppSettings(BaseSettings):
     VERTEX_EXPRESS_API_KEY: Optional[str] = None
     FAKE_STREAMING: bool = False
     FAKE_STREAMING_INTERVAL: float = 1.0
-    MODELS_CONFIG_URL: str = "https://raw.githubusercontent.com/bad-woman/vertex2openai/main/vertexModels.json"
+    MODELS_CONFIG_URL: str = ""
     ROUNDROBIN: bool = False
     SAFETY_SCORE: bool = False
     PROXY_URL: Optional[str] = None
