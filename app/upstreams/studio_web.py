@@ -47,6 +47,13 @@ class WebProxyUpstream(BaseUpstream):
         url = auth_bundle.get("url")
         headers = auth_bundle.get("headers", {}).copy()
         
+        # ==========================================
+        # 核心修复：强制补全被浏览器 JS 引擎屏蔽的安全保护头
+        # 绕过谷歌 API_KEY_HTTP_REFERRER_BLOCKED 网关拦截
+        # ==========================================
+        headers["referer"] = "https://console.cloud.google.com/"
+        headers["origin"] = "https://console.cloud.google.com"
+        
         # 清除会导致 httpx 双流异步解析异常的 Header
         headers.pop("accept-encoding", None)
         headers.pop("content-length", None)
