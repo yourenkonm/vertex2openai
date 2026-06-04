@@ -1,6 +1,7 @@
 import json
 import time
 import httpx
+import traceback  # 用于在控制台打印详细错误堆栈
 from fastapi import Request
 from fastapi.responses import StreamingResponse, JSONResponse
 
@@ -8,6 +9,7 @@ from models import OpenAIRequest
 from upstreams.base import BaseUpstream
 from upstreams.studio_payload import build_studio_graphql_payload
 from runtime_state import app_state
+import config as app_config  # 引入全局配置，以便加载代理
 
 # 引入 11-30 完美的流式追踪与消抖处理器
 from stream_engine.processor import StreamProcessor
@@ -16,7 +18,7 @@ from stream_engine.processor import StreamProcessor
 class WebProxyUpstream(BaseUpstream):
     """
     谷歌 Agent Platform Studio 网页反代渠道处理器
-    封装了动态 Payload 构造、HTTP/2 双向隧道以及非流式聚合拼装逻辑
+    封装了动态 Payload 构造、网络代理继承、安全通道以及非流式聚合拼装逻辑
     """
     async def chat_completions(self, request_obj: OpenAIRequest, fastapi_request: Request):
         auth_bundle = app_state.get_auth_bundle()
@@ -47,10 +49,7 @@ class WebProxyUpstream(BaseUpstream):
         url = auth_bundle.get("url")
         headers = auth_bundle.get("headers", {}).copy()
         
-        # ==========================================
-        # 核心修复：强制补全被浏览器 JS 引擎屏蔽的安全保护头
-        # 绕过谷歌 API_KEY_HTTP_REFERRER_BLOCKED 网关拦截
-        # ==========================================
+        # 核心修复：补全安全保护头
         headers["referer"] = "https://console.cloud.google.com/"
         headers["origin"] = "https://console.cloud.google.com"
         
@@ -59,13 +58,23 @@ class WebProxyUpstream(BaseUpstream):
         headers.pop("content-length", None)
         headers["content-type"] = "application/json"
 
-        # 3. 流式处理通道 (stream = True)
+        # 3. 构造 httpx 客户端参数，继承你的 .env 代理配置，并转为兼容性极佳的 HTTP/1.1 握手
+        client_kwargs = {
+            "timeout": 120.0,
+            "follow_redirects": True
+        }
+        if app_config.PROXY_URL:
+            client_kwargs["proxy"] = app_config.PROXY_URL
+        if app_config.SSL_CERT_FILE:
+            client_kwargs["verify"] = app_config.SSL_CERT_FILE
+
+        # 4. 流式处理通道 (stream = True)
         if request_obj.stream:
             async def stream_generator():
-                processor = StreamProcessor()
-                # 必须指定 http2=True，谷歌后台 GraphQL 的高速并发强依赖 HTTP/2 多路复用机制
-                async with httpx.AsyncClient(http2=True, timeout=120.0) as client:
-                    try:
+                # 防御式全局异常保护：确保连接报错时立刻通知客户端并输出详细日志，绝不悬挂
+                try:
+                    processor = StreamProcessor()
+                    async with httpx.AsyncClient(**client_kwargs) as client:
                         async with client.stream("POST", url, headers=headers, json=payload) as response:
                             if response.status_code != 200:
                                 error_text = await response.aread()
@@ -74,12 +83,14 @@ class WebProxyUpstream(BaseUpstream):
                             
                             async for sse_event in processor.process_stream(response.aiter_text(), model=request_obj.model):
                                 yield sse_event
-                    except Exception as e:
-                        yield f"data: {json.dumps({'error': f'Stream translation failed: {str(e)}'})}\n\n"
+                except Exception as e:
+                    print("❌ [Web Proxy 异常中断] 详细网络或解析堆栈如下：")
+                    traceback.print_exc()
+                    yield f"data: {json.dumps({'error': f'Stream translation failed: {str(e)}'})}\n\n"
             
             return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
-        # 4. 非流式处理通道 (stream = False)，在后端自动聚合 GraphQL 流
+        # 5. 非流式处理通道 (stream = False)，在后端自动聚合 GraphQL 流
         else:
             full_text = ""
             reasoning_text = ""
@@ -87,7 +98,7 @@ class WebProxyUpstream(BaseUpstream):
             tool_calls = []
             
             processor = StreamProcessor()
-            async with httpx.AsyncClient(http2=True, timeout=120.0) as client:
+            async with httpx.AsyncClient(**client_kwargs) as client:
                 try:
                     async with client.stream("POST", url, headers=headers, json=payload) as response:
                         if response.status_code != 200:
@@ -133,6 +144,8 @@ class WebProxyUpstream(BaseUpstream):
                                 except Exception:
                                     pass
                 except Exception as e:
+                    print("❌ [Web Proxy 非流式异常] 详细网络或解析堆栈如下：")
+                    traceback.print_exc()
                     return JSONResponse(status_code=500, content={"error": f"Failed to gather studio response: {str(e)}"})
 
             # 重组标准 OpenAI ChatCompletion 数据包
