@@ -2,7 +2,7 @@ import time
 import httpx
 import asyncio
 import secrets
-from fastapi import FastAPI, Depends, Request, HTTPException
+from fastapi import FastAPI, Depends, Request, HTTPException, Response
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.middleware.cors import CORSMiddleware
@@ -232,18 +232,35 @@ DASHBOARD_HTML = """
                                 <span class="text-xs text-slate-400 font-medium">系统自动维护会话活性</span>
                             </div>
 
+                            <!-- 远程登录可视化终端 -->
+                            <div id="remote-login-console" class="hidden p-3 bg-rose-50 rounded-xl border border-rose-200 mt-2">
+                                <div class="flex items-center justify-between mb-2">
+                                    <span class="text-xs font-bold text-rose-700">⚠️ 需要验证或登录账号 (云端免 VNC 直连)</span>
+                                    <span class="text-[10px] text-rose-500 font-medium">请在下方实时画面中点击/输入操作</span>
+                                </div>
+                                <div class="relative w-full overflow-hidden rounded shadow-sm border border-rose-200 bg-black" style="aspect-ratio: 16/9;">
+                                    <img id="remote-screenshot" class="w-full h-full object-contain cursor-crosshair" src="" alt="Browser Screen">
+                                </div>
+                                <div class="flex gap-2 mt-2">
+                                    <input type="text" id="remote-text-input" class="flex-1 text-xs p-1.5 border border-rose-300 rounded focus:outline-none focus:ring-1 focus:ring-rose-500" placeholder="输入文本 (如邮箱/密码)">
+                                    <button onclick="sendRemoteText()" class="bg-rose-600 hover:bg-rose-700 text-white text-[11px] px-3 rounded shadow-sm font-medium">发送文本</button>
+                                    <button onclick="sendRemoteKey('Enter')" class="bg-slate-600 hover:bg-slate-700 text-white text-[11px] px-3 rounded shadow-sm font-medium">回车</button>
+                                </div>
+                                <div class="text-[10px] text-rose-500 mt-2">提示：由于是实时截图流，直接用手指点击上方图片即可模拟鼠标点击按钮或输入框。</div>
+                            </div>
+
                             <div class="p-3 bg-slate-50 rounded-xl border border-slate-200 mt-2">
-                                <label class="text-xs font-bold text-slate-700 mb-2 block">云端部署免弹窗 - Google Cookie (可选)</label>
-                                <textarea id="google-cookie-input" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg shadow-inner bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-600 font-mono" rows="2" placeholder="填写您的 __Secure-1PSID 等 Cookie 完整字符串，在 Render 等无头云服务器上可免去本地启动登录的步骤"></textarea>
+                                <label class="text-xs font-bold text-slate-700 mb-2 block">手工粘贴 Cookie 注入通道 (可选)</label>
+                                <textarea id="google-cookie-input" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg shadow-inner bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-600 font-mono" rows="2" placeholder="填写您的 __Secure-1PSID 等 Cookie 完整字符串，保存后可跳过上方交互界面"></textarea>
                                 <div class="flex justify-end mt-2">
                                     <button onclick="saveGoogleCookie()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs px-4 py-1.5 rounded-lg transition-all shadow-sm">保存 Cookie 并应用</button>
                                 </div>
                             </div>
                         </div>
                         <div class="text-[11px] text-slate-600 mt-3 p-3 bg-blue-50/70 rounded-xl border border-blue-100/70 leading-relaxed shadow-sm">
-                            💡 <span class="font-bold text-blue-700">使用指南：</span><br>
-                            - <b>本地部署：</b> 首次运行设置 <code>HEADLESS_MODE=False</code> 弹窗扫码登录，完成后改回 True。<br>
-                            - <b>Render 等云端部署：</b> 云端没有浏览器界面，请在上方直接粘贴您的 Google Cookie（包含 __Secure-1PSID 等字段），系统即可全自动静默反代，或在 Render 控制台设置 <code>GOOGLE_COOKIE</code> 环境变量。
+                            💡 <span class="font-bold text-blue-700">全平台通用的无头方案：</span><br>
+                            现在，无论您在 Render 云端还是本地电脑，只要开启 <code>HEADLESS_MODE=True</code>，若遇到需要登录的情况，控制台会<b>自动呈现“远程云桌面实时交互界面”</b>。<br>
+                            您可以在手机或电脑上，<b>直接点击图片里的按钮，或在下方输入框输入账号密码</b>，完成登录后界面会自动消失并静默代理！
                         </div>
                     </div>
                 </div>
@@ -297,6 +314,8 @@ DASHBOARD_HTML = """
 
     <script>
         let chartInstance = null;
+        let screenshotInterval = null;
+
         function formatNumber(num) { return num.toLocaleString('en-US'); }
 
         function switchTab(tabId) {
@@ -367,11 +386,32 @@ DASHBOARD_HTML = """
                         const ageText = document.getElementById('credential-age-text');
                         
                         if (statusData.is_running) {
-                            indicator.className = 'w-3 h-3 rounded-full bg-emerald-500';
-                            statusText.innerText = '🟢 运行中';
+                            if (statusData.needs_login) {
+                                indicator.className = 'w-3 h-3 rounded-full bg-amber-500 animate-pulse';
+                                statusText.innerText = '🟡 等待远程交互登录';
+                                document.getElementById('remote-login-console').classList.remove('hidden');
+                                if(!screenshotInterval) {
+                                    screenshotInterval = setInterval(() => {
+                                        document.getElementById('remote-screenshot').src = '/api/headless/screenshot?t=' + new Date().getTime();
+                                    }, 1000);
+                                }
+                            } else {
+                                indicator.className = 'w-3 h-3 rounded-full bg-emerald-500';
+                                statusText.innerText = '🟢 运行中';
+                                document.getElementById('remote-login-console').classList.add('hidden');
+                                if(screenshotInterval) {
+                                    clearInterval(screenshotInterval);
+                                    screenshotInterval = null;
+                                }
+                            }
                         } else {
                             indicator.className = 'w-3 h-3 rounded-full bg-rose-500';
                             statusText.innerText = '🔴 已停止';
+                            document.getElementById('remote-login-console').classList.add('hidden');
+                            if(screenshotInterval) {
+                                clearInterval(screenshotInterval);
+                                screenshotInterval = null;
+                            }
                         }
                         
                         if (statusData.credential_age !== null && statusData.credential_age < 999999) {
@@ -431,6 +471,76 @@ DASHBOARD_HTML = """
             } catch(e) {
                 alert("❌ 网络请求失败");
             }
+        }
+
+        // ================= 远程可视化交互逻辑 =================
+
+        document.getElementById('remote-screenshot').addEventListener('click', async function(e) {
+            const rect = this.getBoundingClientRect();
+            // 假设 Playwright viewport 是 1920x1080
+            const imgWidth = 1920;
+            const imgHeight = 1080;
+            
+            const containerRatio = rect.width / rect.height;
+            const imageRatio = imgWidth / imgHeight;
+            
+            let drawWidth, drawHeight, offsetX, offsetY;
+            
+            if (containerRatio > imageRatio) {
+                drawHeight = rect.height;
+                drawWidth = rect.height * imageRatio;
+                offsetX = (rect.width - drawWidth) / 2;
+                offsetY = 0;
+            } else {
+                drawWidth = rect.width;
+                drawHeight = rect.width / imageRatio;
+                offsetX = 0;
+                offsetY = (rect.height - drawHeight) / 2;
+            }
+            
+            const clickX = e.clientX - rect.left - offsetX;
+            const clickY = e.clientY - rect.top - offsetY;
+            
+            if (clickX < 0 || clickX > drawWidth || clickY < 0 || clickY > drawHeight) return;
+            
+            const finalX = (clickX / drawWidth) * imgWidth;
+            const finalY = (clickY / drawHeight) * imgHeight;
+            
+            await fetch('/api/headless/interact', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'click', x: finalX, y: finalY })
+            });
+            
+            setTimeout(() => {
+                this.src = '/api/headless/screenshot?t=' + new Date().getTime();
+            }, 300);
+        });
+
+        async function sendRemoteText() {
+            const input = document.getElementById('remote-text-input');
+            const text = input.value;
+            if(!text) return;
+            await fetch('/api/headless/interact', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'type', text: text })
+            });
+            input.value = '';
+            setTimeout(() => {
+                document.getElementById('remote-screenshot').src = '/api/headless/screenshot?t=' + new Date().getTime();
+            }, 500);
+        }
+        
+        async function sendRemoteKey(key) {
+            await fetch('/api/headless/interact', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'key', key: key })
+            });
+            setTimeout(() => {
+                document.getElementById('remote-screenshot').src = '/api/headless/screenshot?t=' + new Date().getTime();
+            }, 500);
         }
 
         async function refreshCredentials() {
@@ -547,8 +657,10 @@ async def set_settings_mode(setting: ModeSetting, username: str = Depends(verify
 async def get_headless_status(username: str = Depends(verify_auth)):
     global _global_browser
     is_running = _global_browser is not None and _global_browser.is_running
+    needs_login = _global_browser is not None and _global_browser.needs_manual_login
     return JSONResponse(content={
         "is_running": is_running,
+        "needs_login": needs_login,
         "credential_age": app_state.get_credential_age() if app_state.get_credential_timestamp() > 0 else None
     })
 
@@ -574,6 +686,37 @@ async def set_google_cookie(setting: CookieSetting, username: str = Depends(veri
     
     asyncio.create_task(run_headless_browser())
     return JSONResponse(content={"status": "success"})
+
+# ========== 远程可视化交互 API ==========
+
+class RemoteInteraction(BaseModel):
+    action: str
+    x: float = 0
+    y: float = 0
+    text: str = ""
+    key: str = ""
+
+@app.get("/api/headless/screenshot")
+async def get_headless_screenshot(username: str = Depends(verify_auth)):
+    global _global_browser
+    if _global_browser and _global_browser.is_running:
+        img_bytes = await _global_browser.get_screenshot()
+        if img_bytes:
+            return Response(content=img_bytes, media_type="image/jpeg")
+    return Response(status_code=404)
+
+@app.post("/api/headless/interact")
+async def headless_interact(interaction: RemoteInteraction, username: str = Depends(verify_auth)):
+    global _global_browser
+    if _global_browser and _global_browser.is_running:
+        if interaction.action == "click":
+            await _global_browser.send_click(interaction.x, interaction.y)
+        elif interaction.action == "type":
+            await _global_browser.send_text(interaction.text)
+        elif interaction.action == "key":
+            await _global_browser.send_key(interaction.key)
+        return JSONResponse(content={"status": "success"})
+    return JSONResponse(status_code=503, content={"error": "Not running"})
 
 @app.get("/stream-logs")
 async def stream_logs_endpoint(request: Request, username: str = Depends(verify_auth)):
