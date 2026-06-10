@@ -231,12 +231,19 @@ DASHBOARD_HTML = """
                                 </div>
                                 <span class="text-xs text-slate-400 font-medium">系统自动维护会话活性</span>
                             </div>
+
+                            <div class="p-3 bg-slate-50 rounded-xl border border-slate-200 mt-2">
+                                <label class="text-xs font-bold text-slate-700 mb-2 block">云端部署免弹窗 - Google Cookie (可选)</label>
+                                <textarea id="google-cookie-input" class="w-full text-xs p-2.5 border border-slate-300 rounded-lg shadow-inner bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-slate-600 font-mono" rows="2" placeholder="填写您的 __Secure-1PSID 等 Cookie 完整字符串，在 Render 等无头云服务器上可免去本地启动登录的步骤"></textarea>
+                                <div class="flex justify-end mt-2">
+                                    <button onclick="saveGoogleCookie()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs px-4 py-1.5 rounded-lg transition-all shadow-sm">保存 Cookie 并应用</button>
+                                </div>
+                            </div>
                         </div>
                         <div class="text-[11px] text-slate-600 mt-3 p-3 bg-blue-50/70 rounded-xl border border-blue-100/70 leading-relaxed shadow-sm">
-                            💡 <span class="font-bold text-blue-700">首次使用指南：</span><br>
-                            1. 停止当前服务，在 <code>.env</code> 中设置 <code>HEADLESS_MODE=False</code> 并启动。<br>
-                            2. 系统将弹出浏览器窗口，请在此窗口内手动登录您的 Google 账号（由于是持久化会话，只需登录一次）。<br>
-                            3. 登录完成并跳转到 Vertex AI 界面后，关闭服务。将 <code>HEADLESS_MODE=True</code> 改回，重启即可全自动静默反代。
+                            💡 <span class="font-bold text-blue-700">使用指南：</span><br>
+                            - <b>本地部署：</b> 首次运行设置 <code>HEADLESS_MODE=False</code> 弹窗扫码登录，完成后改回 True。<br>
+                            - <b>Render 等云端部署：</b> 云端没有浏览器界面，请在上方直接粘贴您的 Google Cookie（包含 __Secure-1PSID 等字段），系统即可全自动静默反代，或在 Render 控制台设置 <code>GOOGLE_COOKIE</code> 环境变量。
                         </div>
                     </div>
                 </div>
@@ -403,6 +410,29 @@ DASHBOARD_HTML = """
             if(mode === 'web_proxy') fetchStats(); // Refresh immediately
         }
 
+        async function saveGoogleCookie() {
+            const cookieStr = document.getElementById('google-cookie-input').value;
+            if(!cookieStr.trim()) {
+                alert("请输入 Cookie 字符串");
+                return;
+            }
+            try {
+                const res = await fetch('/api/headless/cookie', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cookie: cookieStr })
+                });
+                if(res.ok) {
+                    alert("✅ Cookie 保存成功！无头浏览器将会重启以应用新 Cookie");
+                    setTimeout(fetchStats, 3000);
+                } else {
+                    alert("❌ 保存失败");
+                }
+            } catch(e) {
+                alert("❌ 网络请求失败");
+            }
+        }
+
         async function refreshCredentials() {
             try {
                 const res = await fetch('/api/headless/refresh', { method: 'POST' });
@@ -529,6 +559,21 @@ async def trigger_headless_refresh(username: str = Depends(verify_auth)):
         asyncio.create_task(_global_browser.send_test_message())
         return JSONResponse(content={"status": "success"})
     return JSONResponse(status_code=503, content={"error": "无头浏览器未运行"})
+
+class CookieSetting(BaseModel):
+    cookie: str
+
+@app.post("/api/headless/cookie")
+async def set_google_cookie(setting: CookieSetting, username: str = Depends(verify_auth)):
+    app_state.set_google_cookie(setting.cookie)
+    
+    # 强制重启无头浏览器以应用新 Cookie
+    global _global_browser
+    if _global_browser and _global_browser.is_running:
+        await _global_browser.close()
+    
+    asyncio.create_task(run_headless_browser())
+    return JSONResponse(content={"status": "success"})
 
 @app.get("/stream-logs")
 async def stream_logs_endpoint(request: Request, username: str = Depends(verify_auth)):

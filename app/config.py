@@ -15,6 +15,7 @@ class AppSettings(BaseSettings):
 
     # 无头浏览器模式配置
     HEADLESS_MODE: bool = True              # 是否无头模式（首次登录时设为 False 以显示浏览器窗口）
+    GOOGLE_COOKIE: Optional[str] = None     # 云端部署专用：直接填入浏览器抓取的 Cookie 字符串，免本地弹窗登录
     CREDENTIAL_REFRESH_INTERVAL: int = 180  # 凭证自动刷新间隔（秒），默认3分钟
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -38,6 +39,7 @@ SAFETY_SCORE = _settings.SAFETY_SCORE
 PROXY_URL = _settings.PROXY_URL
 SSL_CERT_FILE = _settings.SSL_CERT_FILE
 HEADLESS_MODE = _settings.HEADLESS_MODE
+GOOGLE_COOKIE = _settings.GOOGLE_COOKIE
 CREDENTIAL_REFRESH_INTERVAL = _settings.CREDENTIAL_REFRESH_INTERVAL
 
 VERTEX_REASONING_TAG = "vertex_think_tag"

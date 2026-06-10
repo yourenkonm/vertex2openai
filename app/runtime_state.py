@@ -65,6 +65,18 @@ class AppState:
             state = self._load_state()
             return state.get("auth_bundle", {}).copy()
 
+    def set_google_cookie(self, cookie_str: str):
+        with self._lock:
+            state = self._load_state()
+            state["google_cookie"] = cookie_str
+            self._save_state(state)
+            print("🔄 [状态管理器] 谷歌独立 Cookie 已保存到运行状态")
+
+    def get_google_cookie(self) -> str:
+        with self._lock:
+            state = self._load_state()
+            return state.get("google_cookie", "")
+
     # ========== 凭证生命周期管理（新增） ==========
 
     def get_credential_age(self) -> float:
