@@ -4,7 +4,8 @@ WORKDIR /app
 
 # Install dependencies
 COPY app/requirements.txt .
-RUN pip cache purge && pip install --no-cache-dir -r requirements.txt
+RUN pip cache purge && pip install --no-cache-dir -r requirements.txt && \
+    playwright install --with-deps chromium
 
 # Copy application code and local model fallback
 COPY app/ .
