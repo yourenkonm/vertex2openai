@@ -38,7 +38,7 @@ from cookie_auth import (
 MAX_RETRIES = 3
 RETRY_BACKOFF = [2, 4, 8]  # 每次重试等待秒数
 
-# 可重试的错误关键词
+# 可重试的错误关键词（429 限流类）
 RETRYABLE_KEYWORDS = [
     "resource exhausted",
     "try again later",
@@ -50,11 +50,36 @@ RETRYABLE_KEYWORDS = [
     "internal error",
 ]
 
+# Cookie 过期/权限失效的错误关键词（不可重试，需要刷新 Cookie）
+COOKIE_EXPIRED_KEYWORDS = [
+    "permission",
+    "denied",
+    "aiplatform.endpoints.predict",
+    "not authorized",
+    "unauthenticated",
+    "login required",
+    "session expired",
+    "invalid credentials",
+]
+
+COOKIE_REFRESH_HINT = (
+    "\n\n💡 Cookie 可能已过期（PSIDTS 约 1-2 小时有效）。"
+    "请重新获取：在电脑浏览器打开 console.cloud.google.com，"
+    "按 F12 打开控制台，输入 copy(document.cookie) 回车，"
+    "然后到大盘粘贴新 Cookie。"
+)
+
 
 def _is_retryable_error(error_msg: str) -> bool:
-    """判断错误是否可重试"""
+    """判断错误是否可重试（429 限流类）"""
     lower = error_msg.lower()
     return any(kw in lower for kw in RETRYABLE_KEYWORDS)
+
+
+def _is_cookie_expired_error(error_msg: str) -> bool:
+    """判断是否为 Cookie 过期/权限失效错误"""
+    lower = error_msg.lower()
+    return any(kw in lower for kw in COOKIE_EXPIRED_KEYWORDS)
 
 
 # ========== requestContext 模板 ==========
@@ -62,6 +87,8 @@ def _is_retryable_error(error_msg: str) -> bool:
 def _build_request_context(project_id: str) -> dict:
     """
     构建 batchGraphql 的 requestContext
+    
+    包含 experimentFlagsBinary，这是 Express Mode 权限的关键标识。
     """
     return {
         "clientVersion": "boq_cloud-boq-clientweb-vertexaistudio_20260609.06_p0",
@@ -73,6 +100,7 @@ def _build_request_context(project_id: str) -> dict:
         "projectId": project_id,
         "selectedPurview": {"projectId": project_id},
         "jurisdiction": "global",
+        "experimentFlagsBinary": app_config.EXPERIMENT_FLAGS or "",
         "localizationData": {"locale": "zh_CN", "timezone": "Asia/Hong_Kong"}
     }
 
@@ -362,6 +390,12 @@ async def _execute_stream_request(
             if response.status_code != 200:
                 error_text = await response.aread()
                 error_msg = error_text.decode('utf-8', errors='replace')[:1000]
+                
+                # 401/403 = Cookie 过期
+                if response.status_code in (401, 403) or _is_cookie_expired_error(error_msg):
+                    print(f"🔑 [Studio] HTTP {response.status_code} Cookie 过期/权限错误 (尝试 {attempt+1})")
+                    return False, [], error_msg + COOKIE_REFRESH_HINT, False
+                
                 is_retryable = response.status_code in (429, 503, 500) or _is_retryable_error(error_msg)
                 print(f"{'⚠️' if is_retryable else '❌'} [Studio] HTTP {response.status_code} (尝试 {attempt+1}): {error_msg[:150]}")
                 return False, [], error_msg, is_retryable
@@ -388,12 +422,17 @@ async def _execute_stream_request(
                     elif event_type == "error":
                         err_msg = data.get("message", str(data)) if isinstance(data, dict) else str(data)
                         
+                        # Cookie 过期/权限失效 → 不可重试，立即返回并提示刷新
+                        if _is_cookie_expired_error(err_msg) and not has_content:
+                            print(f"🔑 [Studio] Cookie 过期/权限错误: {err_msg[:150]}")
+                            return False, [], err_msg + COOKIE_REFRESH_HINT, False
+                        
+                        # 429 限流类 → 可重试
                         if _is_retryable_error(err_msg) and not has_content:
-                            # 429 类错误且还没发送内容 → 可重试
                             print(f"⚠️ [Studio] 429/限流 (尝试 {attempt+1}): {err_msg[:150]}")
                             return False, [], err_msg, True
                         
-                        # 不可重试的 API 错误，加入事件流
+                        # 其他 API 错误，加入事件流
                         print(f"❌ [Studio] API 错误: {err_msg[:200]}")
                         events.append(_make_openai_chunk(
                             response_id, model_display,
