@@ -52,7 +52,6 @@ Vertex2OpenAI 是一个 **OpenAI API 兼容代理**。它对外提供 OpenAI 风
 | `SSL_CERT_FILE` | 否 | 空 | 自定义证书路径。 |
 | `GOOGLE_COOKIE` | 否 | 空 | 网页反代直连模式下的 Google Cookie 字符串（初始化使用，后续可在后台随时更新）。 |
 | `GOOGLE_PROJECT_ID` | 否 | 空 | 网页反代直连模式下的 Google Cloud 项目 ID（初始化使用，后续可在后台随时更新）。 |
-| `GOOGLE_REGION` | 否 | `us-central1` | 网页反代直连模式下的服务区域，默认 `us-central1`。 |
 
 ---
 
