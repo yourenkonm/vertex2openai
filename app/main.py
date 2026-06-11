@@ -452,7 +452,7 @@ DASHBOARD_HTML = """
         function handleCookieInput(e) {
             const val = e.target.value.trim();
             if (val.includes('===VERTEX_SYNC===')) {
-                const lines = val.split('\n');
+                const lines = val.split('\\n');
                 let parsedProject = '';
                 let parsedCookie = '';
                 for (let line of lines) {
@@ -476,7 +476,7 @@ DASHBOARD_HTML = """
             let projectId = document.getElementById('google-project-id-input').value.trim();
             
             if (cookieStr.includes('===VERTEX_SYNC===')) {
-                const lines = cookieStr.split('\n');
+                const lines = cookieStr.split('\\n');
                 let parsedProject = '';
                 let parsedCookie = '';
                 for (let line of lines) {
