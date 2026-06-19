@@ -585,6 +585,11 @@ DASHBOARD_HTML = """
 </html>
 """
 
+@app.get("/keepalive")
+@app.head("/keepalive")
+async def keepalive():
+    return Response(status_code=204)
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard_ui(username: str = Depends(verify_auth)):
     return DASHBOARD_HTML
