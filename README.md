@@ -50,6 +50,8 @@ Vertex2OpenAI 是一个 **OpenAI API 兼容代理**。它对外提供 OpenAI 风
 | `SAFETY_SCORE` | 否 | `false` | 是否把 Gemini safety ratings 附加到输出中。 |
 | `PROXY_URL` | 否 | 空 | 上游 HTTP/HTTPS/SOCKS 代理。 |
 | `SSL_CERT_FILE` | 否 | 空 | 自定义证书路径。 |
+| `KEEPALIVE_URL` | 否 | 空 | 自保活 URL。部署在 Render 等空闲休眠平台时可设为 `https://你的域名/keepalive`。 |
+| `KEEPALIVE_INTERVAL` | 否 | `60` | 自保活请求间隔秒数。 |
 | `GOOGLE_COOKIE` | 否 | 空 | 网页反代直连模式下的 Google Cookie 字符串（初始化使用，后续可在后台随时更新）。 |
 | `GOOGLE_PROJECT_ID` | 否 | 空 | 网页反代直连模式下的 Google Cloud 项目 ID（初始化使用，后续可在后台随时更新）。 |
 

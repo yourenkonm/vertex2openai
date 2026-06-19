@@ -12,6 +12,8 @@ class AppSettings(BaseSettings):
     SAFETY_SCORE: bool = False
     PROXY_URL: Optional[str] = None
     SSL_CERT_FILE: Optional[str] = None
+    KEEPALIVE_URL: Optional[str] = None
+    KEEPALIVE_INTERVAL: int = 60
 
     # Cookie direct mode settings (Recommended for cloud deployments like Render)
     GOOGLE_COOKIE: Optional[str] = None         # Google Cookie string
@@ -42,6 +44,8 @@ ROUNDROBIN = _settings.ROUNDROBIN
 SAFETY_SCORE = _settings.SAFETY_SCORE
 PROXY_URL = _settings.PROXY_URL
 SSL_CERT_FILE = _settings.SSL_CERT_FILE
+KEEPALIVE_URL = _settings.KEEPALIVE_URL
+KEEPALIVE_INTERVAL = _settings.KEEPALIVE_INTERVAL
 
 GOOGLE_COOKIE = _settings.GOOGLE_COOKIE
 GOOGLE_PROJECT_ID = _settings.GOOGLE_PROJECT_ID

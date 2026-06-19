@@ -16,4 +16,8 @@ services:
       # Optional: fake streaming keeps client connections alive while waiting for non-streaming Gemini responses.
       - FAKE_STREAMING=false
       - FAKE_STREAMING_INTERVAL=1.0
+      # Optional: self keep-alive for idle-sleep platforms like Render.
+      # Set this to your deployed URL, for example: https://your-app.onrender.com/keepalive
+      - KEEPALIVE_URL=
+      - KEEPALIVE_INTERVAL=60
     restart: unless-stopped

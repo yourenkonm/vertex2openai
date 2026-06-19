@@ -21,6 +21,49 @@ from cookie_auth import validate_cookie
 
 express_key_manager = ExpressKeyManager()
 _global_browser = None
+_keepalive_task = None
+
+async def keepalive_loop(url: str, interval: int):
+    print(f"[KeepAlive] self keepalive started: {url}, interval={interval}s")
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                response = await client.get(url)
+            print(f"[KeepAlive] GET {url} -> {response.status_code}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[KeepAlive] GET {url} failed: {e}")
+
+        await asyncio.sleep(interval)
+
+async def start_keepalive_service():
+    global _keepalive_task
+    url = (config.KEEPALIVE_URL or "").strip()
+    interval = config.KEEPALIVE_INTERVAL
+
+    if not url:
+        return
+
+    if interval <= 0:
+        print(f"[KeepAlive] invalid KEEPALIVE_INTERVAL={interval}; service not started.")
+        return
+
+    if _keepalive_task and not _keepalive_task.done():
+        return
+
+    _keepalive_task = asyncio.create_task(keepalive_loop(url, interval))
+
+async def stop_keepalive_service():
+    global _keepalive_task
+    if _keepalive_task and not _keepalive_task.done():
+        _keepalive_task.cancel()
+        try:
+            await _keepalive_task
+        except asyncio.CancelledError:
+            pass
+        print("[KeepAlive] self keepalive stopped.")
+    _keepalive_task = None
 
 async def run_headless_browser():
     """后台运行无头浏览器（仅本地环境可选，云端请用 Cookie 直连模式）"""
@@ -64,12 +107,14 @@ async def lifespan(app: FastAPI):
     else:
         print("⚠️ [密钥配置] 未检测到 VERTEX_EXPRESS_API_KEY。若不启用网页反代，聊天请求将会报错。")
     await refresh_models_config_cache()
+    await start_keepalive_service()
     
     # 根据大盘配置启动无头浏览器
     if app_state.is_web_proxy_enabled():
         asyncio.create_task(run_headless_browser())
         
     yield
+    await stop_keepalive_service()
     if _global_browser and _global_browser.is_running:
         await _global_browser.close()
 
