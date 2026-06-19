@@ -585,10 +585,12 @@ DASHBOARD_HTML = """
 </html>
 """
 
-@app.get("/keepalive")
-@app.head("/keepalive")
+@app.api_route("/keepalive", methods=["GET", "HEAD"])
+@app.api_route("/health", methods=["GET", "HEAD"])
+@app.api_route("/healthz", methods=["GET", "HEAD"])
+@app.api_route("/ping", methods=["GET", "HEAD"])
 async def keepalive():
-    return Response(status_code=204)
+    return Response(content="ok\n", media_type="text/plain")
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard_ui(username: str = Depends(verify_auth)):
